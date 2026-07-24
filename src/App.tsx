@@ -532,7 +532,708 @@ function App() {
     const ratio = selectedPlacement.widthPt / selectedPlacement.heightPt
     const widthPt = mmToPt(widthMm)
     const heightPt = widthPt / ratio
-    updatePlacement(selectedPlacemen…8793 tokens truncated…edAsset.name}</strong><span>第 {selectedPlacement.pageIndex + 1} 页</span></div>
+    updatePlacement(selectedPlacement.id, { widthPt, heightPt })
+    rememberAssetDefaultSize(selectedAsset, widthPt, heightPt, false)
+  }
+
+  const changePage = (nextPage: number) => {
+    if (!pdf || nextPage < 0 || nextPage >= pdf.document.numPages) return
+    setPageIndex(nextPage)
+    setSelectedId(null)
+    setTargetRect(null)
+    setTargetDraftRect(null)
+  }
+
+  const readPageSizes = useCallback(async (indices: number[]) => {
+    const sizes = new Map<number, PageSize>()
+    if (!pdf) return sizes
+
+    await Promise.all(
+      [...new Set(indices)].map(async (index) => {
+        if (index < 0 || index >= pdf.document.numPages) return
+        try {
+          const page = await pdf.document.getPage(index + 1)
+          const viewport = page.getViewport({ scale: 1 })
+          sizes.set(index, { widthPt: viewport.width, heightPt: viewport.height })
+        } catch {
+          // A page that cannot be read is reported as missing when the template is applied.
+        }
+      }),
+    )
+    return sizes
+  }, [pdf])
+
+  const openTemplateSave = () => {
+    if (!pdf || placements.length === 0) {
+      notify('先在 PDF 上摆好需要保存的签名和印章。')
+      return
+    }
+    const baseName = pdf.fileName.replace(/\.pdf$/i, '').trim()
+    setTemplateName(`${baseName || '签章'}范式`)
+    setShowTemplateSave(true)
+  }
+
+  const commitTemplate = async () => {
+    if (!pdf || placements.length === 0 || !templateName.trim() || templateBusy) return
+    setTemplateBusy(true)
+    try {
+      const existing = templates.find((template) => template.name === templateName.trim())
+      const pageSizes = await readPageSizes(placements.map((placement) => placement.pageIndex))
+      const template = createStampTemplate({
+        id: existing?.id ?? createId(),
+        name: templateName,
+        sourceFileName: pdf.fileName,
+        sourcePageCount: pdf.document.numPages,
+        placements,
+        assets,
+        pageSizes,
+        createdAt: existing?.createdAt,
+      })
+      if (!template || template.placements.length !== placements.length) {
+        notify('范式保存失败：部分签章素材或 PDF 页面无法读取。', 'error')
+        return
+      }
+
+      setTemplates((current) => [
+        template,
+        ...current.filter((item) => item.id !== template.id),
+      ])
+      setShowTemplateSave(false)
+      notify(
+        existing
+          ? `已更新范式“${template.name}”，共 ${template.placements.length} 个签章。`
+          : `已保存范式“${template.name}”，以后可一键套用 ${template.placements.length} 个签章。`,
+        'success',
+      )
+    } finally {
+      setTemplateBusy(false)
+    }
+  }
+
+  const applyTemplate = async (template: StampTemplate) => {
+    if (!pdf || applyingTemplateId) return
+    if (
+      placements.length > 0 &&
+      !window.confirm(`当前 PDF 已有 ${placements.length} 个签章。套用“${template.name}”会替换它们，是否继续？`)
+    ) {
+      return
+    }
+
+    setApplyingTemplateId(template.id)
+    try {
+      const pageSizes = await readPageSizes(template.placements.map((placement) => placement.pageIndex))
+      const result = instantiateStampTemplate(template, assets, pageSizes)
+      if (result.placements.length === 0) {
+        const reasons = [
+          result.missingAssets.length > 0 ? `缺少素材：${result.missingAssets.join('、')}` : '',
+          result.missingPages.length > 0 ? `缺少页码：第 ${result.missingPages.join('、')} 页` : '',
+        ].filter(Boolean)
+        notify(`无法套用“${template.name}”${reasons.length ? `；${reasons.join('；')}` : ''}。`, 'error')
+        return
+      }
+
+      setPlacements(result.placements)
+      setSelectedId(null)
+      setTargetRect(null)
+      setTargetDraftRect(null)
+      setTool('select')
+      const firstPage = Math.min(...result.placements.map((placement) => placement.pageIndex))
+      setPageIndex(firstPage)
+
+      const warnings = [
+        result.missingAssets.length > 0 ? `缺少素材：${result.missingAssets.join('、')}` : '',
+        result.missingPages.length > 0 ? `当前 PDF 没有第 ${result.missingPages.join('、')} 页` : '',
+      ].filter(Boolean)
+      notify(
+        `已套用“${template.name}”，自动放置 ${result.placements.length} 个签章${warnings.length ? `；${warnings.join('；')}` : ''}。`,
+        warnings.length ? 'info' : 'success',
+      )
+    } finally {
+      setApplyingTemplateId(null)
+    }
+  }
+
+  const deleteTemplate = (template: StampTemplate) => {
+    if (!window.confirm(`删除签章范式“${template.name}”？范式中的签章素材不会被删除。`)) return
+    setTemplates((current) => current.filter((item) => item.id !== template.id))
+    notify(`已删除范式“${template.name}”。`)
+  }
+
+  const changeReferencePage = (nextPage: number) => {
+    if (!referencePdf || nextPage < 0 || nextPage >= referencePdf.document.numPages) return
+    setReferencePageIndex(nextPage)
+    setReferencePageSize(null)
+    setReferenceRect(null)
+    setReferenceDraftRect(null)
+  }
+
+  const handleReferenceSelectionStart = useCallback(() => {
+    setReferenceRect(null)
+    setReferenceDraftRect(null)
+  }, [])
+
+  const handleReferenceSelectionComplete = useCallback((selection: TargetRect) => {
+    setReferenceDraftRect(selection)
+    notify('可拖动参考框或八个控制点微调，按 Enter 确认。')
+  }, [notify])
+
+  const confirmReferenceSelection = useCallback(() => {
+    if (!referenceDraftRect) return
+    setReferenceRect(referenceDraftRect)
+    setReferenceDraftRect(null)
+    notify('参考框已确认，现在可以保存这个尺寸。', 'success')
+  }, [notify, referenceDraftRect])
+
+  const cancelReferenceSelection = useCallback(() => {
+    if (!referenceDraftRect) return
+    setReferenceDraftRect(null)
+    notify('已取消本次参考框选。')
+  }, [notify, referenceDraftRect])
+
+  const resetReferenceSelection = useCallback(() => {
+    setReferenceRect(null)
+    setReferenceDraftRect(null)
+  }, [])
+
+  const closeReferencePicker = useCallback(() => {
+    setReferenceDraftRect(null)
+    setShowReferencePicker(false)
+  }, [])
+
+  const saveReferenceSize = () => {
+    if (!referencePdf || !referenceRect || referenceRect.widthPt <= 0 || referenceRect.heightPt <= 0) return
+    const size = {
+      widthMm: ptToMm(referenceRect.widthPt),
+      heightMm: ptToMm(referenceRect.heightPt),
+      sourceFileName: referencePdf.fileName,
+      capturedAt: Date.now(),
+    }
+    setReferencePreference({ size, enabled: true })
+
+    if (selectedPlacement && selectedAsset) {
+      const centerX = selectedPlacement.xPt + selectedPlacement.widthPt / 2
+      const centerY = selectedPlacement.yPt + selectedPlacement.heightPt / 2
+      const fitted = fitPlacementToTarget(selectedPlacement, {
+        xPt: centerX - referenceRect.widthPt / 2,
+        yPt: centerY - referenceRect.heightPt / 2,
+        widthPt: referenceRect.widthPt,
+        heightPt: referenceRect.heightPt,
+      })
+      updatePlacement(selectedPlacement.id, fitted)
+      rememberAssetDefaultSize(selectedAsset, fitted.widthPt, fitted.heightPt, false)
+      notify(
+        `已保存参考框 ${roundTo(size.widthMm, 1)} × ${roundTo(size.heightMm, 1)} mm，并更新“${selectedAsset.name}”的常用尺寸。`,
+        'success',
+      )
+    } else {
+      notify(
+        `已保存参考框 ${roundTo(size.widthMm, 1)} × ${roundTo(size.heightMm, 1)} mm，以后放置签章会自动套入。`,
+        'success',
+      )
+    }
+    closeReferencePicker()
+  }
+
+  const exportPdf = async () => {
+    if (!pdf || placements.length === 0) return
+    setExporting(true)
+    try {
+      let bytes: Uint8Array
+      if (secureExport) {
+        const flattenedPages = await renderFlattenedPages(pdf.document, placements, assets)
+        bytes = await exportFlattenedPdf(pdf.bytes, flattenedPages)
+      } else {
+        const pageTransforms = await Promise.all(
+          Array.from({ length: pdf.document.numPages }, async (_, index) => {
+            const page = await pdf.document.getPage(index + 1)
+            const [a, b, c, d, e, f] = page.getViewport({ scale: 1 }).transform
+            return [a, b, c, d, e, f] as PdfViewportTransform
+          }),
+        )
+        bytes = await exportStampedPdf(pdf.bytes, placements, assets, pageTransforms)
+      }
+      const baseName = pdf.fileName.replace(/\.pdf$/i, '')
+      const outputName = `${baseName}-已签章.pdf`
+      if (window.stampFocus) {
+        const result = await window.stampFocus.savePdf(bytes, outputName)
+        if (!result.canceled) {
+          notify(
+            secureExport
+              ? `签章已安全嵌入并导出到 ${result.filePath ?? outputName}`
+              : `已导出到 ${result.filePath ?? outputName}`,
+            'success',
+          )
+        }
+      } else {
+        downloadBytes(bytes, outputName)
+        notify(secureExport ? '签章已安全嵌入并导出。' : 'PDF 已导出。', 'success')
+      }
+    } catch {
+      notify('导出失败，请确认 PDF 没有编辑保护。', 'error')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement
+      if (target.matches('input, textarea, select, [contenteditable="true"]')) return
+      if (showReferencePicker) return
+      if (tool === 'target') {
+        if (event.key === 'Enter' && targetDraftRect) {
+          event.preventDefault()
+          confirmTargetSelection()
+          return
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          cancelTargetSelection()
+          return
+        }
+        const movement = event.shiftKey ? mmToPt(2) : mmToPt(0.5)
+        const delta =
+          event.key === 'ArrowLeft'
+            ? { xPt: -movement, yPt: 0 }
+            : event.key === 'ArrowRight'
+              ? { xPt: movement, yPt: 0 }
+              : event.key === 'ArrowUp'
+                ? { xPt: 0, yPt: -movement }
+                : event.key === 'ArrowDown'
+                  ? { xPt: 0, yPt: movement }
+                  : null
+        if (delta && targetDraftRect && pageSize) {
+          event.preventDefault()
+          setTargetDraftRect((current) => current && moveTargetRect(current, delta.xPt, delta.yPt, pageSize))
+        }
+        return
+      }
+      if (!selectedPlacement) return
+      if (event.key === 'Delete' || event.key === 'Backspace') {
+        event.preventDefault()
+        removePlacement(selectedPlacement.id)
+        return
+      }
+      const movement = event.shiftKey ? mmToPt(2) : mmToPt(0.5)
+      const delta =
+        event.key === 'ArrowLeft'
+          ? { xPt: selectedPlacement.xPt - movement }
+          : event.key === 'ArrowRight'
+            ? { xPt: selectedPlacement.xPt + movement }
+            : event.key === 'ArrowUp'
+              ? { yPt: selectedPlacement.yPt - movement }
+              : event.key === 'ArrowDown'
+                ? { yPt: selectedPlacement.yPt + movement }
+                : null
+      if (delta) {
+        event.preventDefault()
+        updatePlacement(selectedPlacement.id, delta)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [cancelTargetSelection, confirmTargetSelection, pageSize, removePlacement, selectedPlacement, showReferencePicker, targetDraftRect, tool, updatePlacement])
+
+  useEffect(() => {
+    if (!showReferencePicker) return
+    const onReferenceKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement
+      if (target.matches('input, textarea, select, [contenteditable="true"]')) return
+      if (event.key === 'Enter' && referenceDraftRect) {
+        event.preventDefault()
+        confirmReferenceSelection()
+        return
+      }
+      if (event.key === 'Escape' && referenceDraftRect) {
+        event.preventDefault()
+        cancelReferenceSelection()
+        return
+      }
+      const movement = event.shiftKey ? mmToPt(2) : mmToPt(0.5)
+      const delta =
+        event.key === 'ArrowLeft'
+          ? { xPt: -movement, yPt: 0 }
+          : event.key === 'ArrowRight'
+            ? { xPt: movement, yPt: 0 }
+            : event.key === 'ArrowUp'
+              ? { xPt: 0, yPt: -movement }
+              : event.key === 'ArrowDown'
+                ? { xPt: 0, yPt: movement }
+                : null
+      if (delta && referenceDraftRect && referencePageSize) {
+        event.preventDefault()
+        setReferenceDraftRect((current) =>
+          current && moveTargetRect(current, delta.xPt, delta.yPt, referencePageSize),
+        )
+      }
+    }
+    window.addEventListener('keydown', onReferenceKeyDown)
+    return () => window.removeEventListener('keydown', onReferenceKeyDown)
+  }, [
+    cancelReferenceSelection,
+    confirmReferenceSelection,
+    referenceDraftRect,
+    referencePageSize,
+    showReferencePicker,
+  ])
+
+  return (
+    <div className="app" data-testid="stamp-focus-app">
+      <input
+        ref={pdfInputRef}
+        className="sr-only"
+        type="file"
+        accept="application/pdf,.pdf"
+        onChange={(event) => event.target.files?.[0] && void loadPdf(event.target.files[0])}
+      />
+      <input
+        ref={referencePdfInputRef}
+        className="sr-only"
+        data-testid="reference-pdf-input"
+        type="file"
+        accept="application/pdf,.pdf"
+        onChange={(event) => event.target.files?.[0] && void loadReferencePdf(event.target.files[0])}
+      />
+      <input
+        ref={imageInputRef}
+        className="sr-only"
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        onChange={(event) => event.target.files?.[0] && void startImageImport(event.target.files[0])}
+      />
+
+      <header className="topbar">
+        <div className="brand">
+          <div className="brand-mark"><Focus size={20} strokeWidth={2.4} /></div>
+          <div>
+            <div className="brand-name">章准 <span>Stamp Focus</span></div>
+            <div className="brand-tagline">让每一次签章，尺寸刚刚好</div>
+          </div>
+        </div>
+        <div className="document-name">
+          {pdf ? <><FileText size={15} /> <span>{pdf.fileName}</span></> : <span>尚未打开 PDF</span>}
+        </div>
+        <div className="top-actions">
+          <label
+            className={`secure-export-option ${secureExport ? 'active' : ''}`}
+            title="开启后，有签章的页面会转成高清页面图像，签章无法被单独选中或删除；该页文字搜索和链接可能不可用。"
+          >
+            <input
+              data-testid="secure-export-toggle"
+              type="checkbox"
+              checked={secureExport}
+              disabled={exporting}
+              onChange={(event) => setSecureExport(event.target.checked)}
+            />
+            <ShieldCheck size={15} />
+            <span><strong>安全嵌入</strong><small>签章与页面合成</small></span>
+          </label>
+          <button className="button secondary" onClick={() => pdfInputRef.current?.click()} disabled={pdfLoading}>
+            {pdfLoading ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />}
+            {pdf ? '更换 PDF' : '打开 PDF'}
+          </button>
+          <button
+            className="button primary"
+            onClick={() => void exportPdf()}
+            disabled={!pdf || placements.length === 0 || exporting}
+          >
+            {exporting ? <LoaderCircle className="spin" size={16} /> : <Download size={16} />}
+            导出已签章 PDF
+          </button>
+        </div>
+      </header>
+
+      <main className="workspace">
+        <aside className="asset-panel">
+          <div className="panel-heading">
+            <div>
+              <span className="eyebrow">MY MARKS</span>
+              <h2>常用签章</h2>
+            </div>
+            <button className="icon-button" onClick={() => imageInputRef.current?.click()} aria-label="添加签章图片">
+              <Plus size={18} />
+            </button>
+          </div>
+
+          <button className="import-card" onClick={() => imageInputRef.current?.click()} disabled={draftBusy}>
+            {draftBusy ? <LoaderCircle className="spin" size={21} /> : <ImagePlus size={21} />}
+            <span><strong>添加签名或印章</strong><small>自动去白底并裁掉空白</small></span>
+          </button>
+
+          <div className="asset-list">
+            {assets.length === 0 ? (
+              <div className="asset-empty">
+                <Stamp size={30} strokeWidth={1.4} />
+                <p>还没有常用素材</p>
+                <span>添加一次、记住尺寸，以后直接点选</span>
+              </div>
+            ) : (
+              assets.map((asset) => (
+                <div className="asset-card" key={asset.id}>
+                  <button className="asset-main" onClick={() => addPlacement(asset)}>
+                    <span className="asset-preview"><img src={asset.dataUrl} alt={asset.name} /></span>
+                    <span className="asset-meta">
+                      <strong>{asset.name}</strong>
+                      <span>{kindLabel[asset.kind]} · 专属默认 {roundTo(asset.widthMm, 1)} × {roundTo(asset.heightMm, 1)} mm</span>
+                    </span>
+                  </button>
+                  <button className="asset-edit" onClick={() => editAsset(asset)} aria-label={`编辑${asset.name}`}>
+                    <Pencil size={13} />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+
+          <section className="template-section" aria-label="签章范式">
+            <div className="template-heading">
+              <div>
+                <span className="eyebrow">LAYOUT PRESETS</span>
+                <h3>签章范式</h3>
+              </div>
+              <button
+                className="icon-button compact template-save-button"
+                data-testid="save-template-button"
+                onClick={openTemplateSave}
+                disabled={!pdf || placements.length === 0}
+                aria-label="把当前全部签章保存为范式"
+                title="保存当前 PDF 上全部签章的位置与尺寸"
+              >
+                <Save size={14} />
+              </button>
+            </div>
+            {templates.length === 0 ? (
+              <div className="template-empty">
+                <LayoutTemplate size={19} />
+                <span>摆好全部签章后<br />保存为一键套用范式</span>
+              </div>
+            ) : (
+              <div className="template-list">
+                {templates.map((template) => (
+                  <div className="template-card" key={template.id}>
+                    <button
+                      className="template-apply"
+                      data-testid={`apply-template-${template.id}`}
+                      onClick={() => void applyTemplate(template)}
+                      disabled={!pdf || Boolean(applyingTemplateId)}
+                      title={`套用“${template.name}”`}
+                    >
+                      <span className="template-icon"><LayoutTemplate size={16} /></span>
+                      <span className="template-meta">
+                        <strong>{template.name}</strong>
+                        <small>{template.placements.length} 个签章 · {new Set(template.placements.map((item) => item.pageIndex)).size} 页</small>
+                      </span>
+                      {applyingTemplateId === template.id
+                        ? <LoaderCircle className="spin" size={14} />
+                        : <Play size={13} fill="currentColor" />}
+                    </button>
+                    <button
+                      className="template-delete"
+                      onClick={() => deleteTemplate(template)}
+                      aria-label={`删除范式${template.name}`}
+                      title="删除范式"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+          <div className="privacy-note"><ShieldCheck size={15} /><span>所有文件仅在本机处理<br />不会上传到服务器</span></div>
+        </aside>
+
+        <section className="canvas-panel">
+          {pdf ? (
+            <>
+              <div className="canvas-toolbar">
+                <div className="tool-group">
+                  <button className={tool === 'select' ? 'tool-button active' : 'tool-button'} onClick={() => {
+                    setTool('select')
+                    setTargetDraftRect(null)
+                  }}>
+                    <MousePointer2 size={15} /> 选择
+                  </button>
+                  <button
+                    className={tool === 'hand' ? 'tool-button active hand-tool-button' : 'tool-button hand-tool-button'}
+                    data-testid="hand-tool-button"
+                    onClick={() => {
+                      setTool('hand')
+                      setTargetDraftRect(null)
+                    }}
+                    title="拖动放大后的 PDF 移动视野"
+                  >
+                    <Hand size={15} /> 抓手
+                  </button>
+                  <button
+                    className={tool === 'target' ? 'tool-button active accent' : 'tool-button accent'}
+                    data-testid="target-tool-button"
+                    onClick={() => {
+                      setTool('target')
+                      setTargetRect(null)
+                      setTargetDraftRect(null)
+                      notify('先拖出签字栏，再微调框体，按 Enter 确认。')
+                    }}
+                  >
+                    <Crosshair size={15} /> 框选匹配
+                  </button>
+                  {targetRect && (
+                    <button className="tool-button" onClick={() => setTargetRect(null)}>
+                      <X size={14} /> 清除参考框
+                    </button>
+                  )}
+                  <button
+                    className="tool-button reference-pdf-button"
+                    data-testid="reference-pdf-button"
+                    onClick={() => setShowReferencePicker(true)}
+                  >
+                    <Ruler size={15} /> 参考 PDF 取尺寸
+                  </button>
+                  {referencePreference.size && (
+                    <button
+                      className={referencePreference.enabled ? 'tool-button reference-size-chip active' : 'tool-button reference-size-chip'}
+                      data-testid="reference-size-toggle"
+                      title={referencePreference.enabled ? '点击暂停使用已保存参考尺寸' : '点击继续使用已保存参考尺寸'}
+                      onClick={() => {
+                        setReferencePreference((current) => ({ ...current, enabled: !current.enabled }))
+                        notify(referencePreference.enabled ? '已暂停使用参考尺寸。' : '已恢复使用参考尺寸。')
+                      }}
+                    >
+                      <Check size={13} />
+                      {referencePreference.enabled
+                        ? `${roundTo(referencePreference.size.widthMm, 1)} × ${roundTo(referencePreference.size.heightMm, 1)} mm`
+                        : '参考尺寸已暂停'}
+                    </button>
+                  )}
+                </div>
+                <div className="toolbar-hint">
+                  {tool === 'target'
+                    ? targetDraftRect
+                      ? <><Sparkles size={14} /> 拖动框体或控制点微调 · Enter 确认 · Esc 取消</>
+                      : <><Sparkles size={14} /> 拖出签字栏，松开后可以继续微调</>
+                    : tool === 'hand'
+                      ? <><Hand size={14} /> 按住并拖动页面，移动查看区域</>
+                      : selectedPlacement
+                        ? '拖动位置 · 右下角缩放 · 上方旋转'
+                        : '从左侧点选一个签章'}
+                </div>
+                <div className="tool-group page-controls">
+                  <button className="icon-button compact" onClick={() => changeZoom(-0.1)} aria-label="缩小"><ZoomOut size={15} /></button>
+                  <label className="zoom-input-wrap" title={`输入 ${MIN_ZOOM_PERCENT}–${MAX_ZOOM_PERCENT}，按 Enter 应用`}>
+                    <input
+                      data-testid="zoom-input"
+                      type="number"
+                      min={MIN_ZOOM_PERCENT}
+                      max={MAX_ZOOM_PERCENT}
+                      step="1"
+                      inputMode="numeric"
+                      aria-label="缩放百分比"
+                      value={zoomInput}
+                      onChange={(event) => setZoomInput(event.target.value)}
+                      onFocus={(event) => event.currentTarget.select()}
+                      onBlur={applyZoomInput}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault()
+                          applyZoomInput()
+                          event.currentTarget.blur()
+                        }
+                        if (event.key === 'Escape') {
+                          setZoomInput(String(roundTo(zoom * 100, 1)))
+                          event.currentTarget.blur()
+                        }
+                      }}
+                    />
+                    <span>%</span>
+                  </label>
+                  <button className="icon-button compact" onClick={() => changeZoom(0.1)} aria-label="放大"><ZoomIn size={15} /></button>
+                  <i />
+                  <button className="icon-button compact" onClick={() => changePage(pageIndex - 1)} disabled={pageIndex === 0} aria-label="上一页"><ArrowLeft size={15} /></button>
+                  <span>{pageIndex + 1} / {pdf.document.numPages}</span>
+                  <button className="icon-button compact" onClick={() => changePage(pageIndex + 1)} disabled={pageIndex === pdf.document.numPages - 1} aria-label="下一页"><ArrowRight size={15} /></button>
+                </div>
+              </div>
+              <div
+                ref={canvasScrollRef}
+                className={`canvas-scroll ${tool === 'hand' ? 'hand-active' : ''} ${isPanning ? 'is-panning' : ''}`}
+                data-testid="canvas-scroll"
+                onPointerDown={startCanvasPan}
+                onPointerMove={moveCanvasPan}
+                onPointerUp={finishCanvasPan}
+                onPointerCancel={finishCanvasPan}
+                onLostPointerCapture={() => {
+                  panStateRef.current = null
+                  setIsPanning(false)
+                }}
+              >
+                <PdfStage
+                  document={pdf.document}
+                  pageIndex={pageIndex}
+                  zoom={zoom}
+                  placements={placements}
+                  assets={assets}
+                  selectedId={selectedId}
+                  tool={tool}
+                  targetRect={targetRect}
+                  targetDraftRect={targetDraftRect}
+                  onSizeChange={setPageSize}
+                  onSelect={setSelectedId}
+                  onPlacementChange={updatePlacement}
+                  onPlacementResizeEnd={(assetId, widthPt, heightPt) => {
+                    const asset = assets.find((item) => item.id === assetId)
+                    if (asset) rememberAssetDefaultSize(asset, widthPt, heightPt)
+                  }}
+                  onTargetComplete={handleTargetComplete}
+                  onTargetDraftChange={setTargetDraftRect}
+                  onTargetConfirm={confirmTargetSelection}
+                  onTargetCancel={cancelTargetSelection}
+                />
+              </div>
+            </>
+          ) : (
+            <div
+              className="welcome"
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => {
+                event.preventDefault()
+                const file = event.dataTransfer.files[0]
+                if (file) void loadPdf(file)
+              }}
+            >
+              <div className="welcome-visual">
+                <div className="paper-card paper-back" />
+                <div className="paper-card paper-front">
+                  <span /><span /><span />
+                  <div className="sample-sign">毅仁</div>
+                  <div className="sample-measure">42.0 mm</div>
+                </div>
+                <div className="measure-line"><i /><b>真实尺寸</b><i /></div>
+              </div>
+              <span className="eyebrow">PHYSICAL SIZE, NOT PIXELS</span>
+              <h1>签名多大，落在 PDF 里就多大</h1>
+              <p>打开 PDF，选择保存过的签章尺寸，直接拖到位置。<br />也可以框住原签名区域，一次自动匹配。</p>
+              <button className="button primary large" onClick={() => pdfInputRef.current?.click()}>
+                <Upload size={18} /> 打开一份 PDF
+              </button>
+              <small>也可以把 PDF 拖到这里</small>
+              <div className="feature-row">
+                <span><BadgeCheck size={16} /> 毫米级尺寸</span>
+                <span><Crosshair size={16} /> 框选即匹配</span>
+                <span><ShieldCheck size={16} /> 完全离线</span>
+              </div>
+            </div>
+          )}
+        </section>
+
+        <aside className="inspector-panel">
+          <div className="panel-heading inspector-heading">
+            <div><span className="eyebrow">INSPECTOR</span><h2>尺寸与位置</h2></div>
+          </div>
+          {selectedPlacement && selectedAsset ? (
+            <div className="inspector-content">
+              <div className="selected-summary">
+                <span className="selected-thumb"><img src={selectedAsset.dataUrl} alt="" /></span>
+                <div><strong>{selectedAsset.name}</strong><span>第 {selectedPlacement.pageIndex + 1} 页</span></div>
                 <Check size={16} />
               </div>
 
