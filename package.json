@@ -1,0 +1,65 @@
+{
+  "name": "stamp-focus",
+  "private": true,
+  "version": "0.1.8",
+  "description": "按真实毫米校准并放置 PDF 电子签名和印章的离线桌面工具",
+  "main": "electron/main.cjs",
+  "author": "Stamp Focus",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run src",
+    "electron:dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && electron .\"",
+    "electron:pack": "npm run build && electron-builder --win nsis portable"
+  },
+  "build": {
+    "appId": "com.stampfocus.desktop",
+    "productName": "章准 Stamp Focus",
+    "electronDist": "node_modules/electron/dist",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "artifactName": "Stamp-Focus-Setup-${version}-${arch}.${ext}",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "章准 Stamp Focus"
+    },
+    "portable": {
+      "artifactName": "Stamp-Focus-Portable-${version}-${arch}.${ext}"
+    }
+  },
+  "dependencies": {
+    "lucide-react": "^1.25.0",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^6.1.200",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "concurrently": "^9.2.4",
+    "electron": "^39.2.7",
+    "electron-builder": "^26.0.12",
+    "typescript": "^7.0.2",
+    "vite": "^8.1.5",
+    "vitest": "^4.1.10",
+    "wait-on": "^9.0.10"
+  }
+}
