@@ -24,6 +24,7 @@ interface PdfStageProps {
   onSizeChange: (size: PageSize) => void
   onSelect: (id: string | null) => void
   onPlacementChange: (id: string, patch: Partial<Placement>) => void
+  onPlacementResizeEnd: (assetId: string, widthPt: number, heightPt: number) => void
   onTargetComplete: (target: TargetRect) => void
   onTargetDraftChange: (target: TargetRect) => void
   onTargetConfirm: () => void
@@ -46,6 +47,7 @@ function PlacementBox({
   disabled,
   onSelect,
   onChange,
+  onResizeEnd,
 }: {
   placement: Placement
   asset: StampAsset
@@ -54,6 +56,7 @@ function PlacementBox({
   disabled: boolean
   onSelect: () => void
   onChange: (patch: Partial<Placement>) => void
+  onResizeEnd: (widthPt: number, heightPt: number) => void
 }) {
   const boxRef = useRef<HTMLDivElement>(null)
 
@@ -89,6 +92,8 @@ function PlacementBox({
     const originWidth = placement.widthPt
     const originHeight = placement.heightPt
     const ratio = originWidth / originHeight
+    let finalWidthPt = originWidth
+    let finalHeightPt = originHeight
 
     const move = (moveEvent: PointerEvent) => {
       const projectedDelta =
@@ -96,14 +101,21 @@ function PlacementBox({
           ? (moveEvent.clientX - startX) / zoom
           : ((moveEvent.clientY - startY) / zoom) * ratio
       const widthPt = Math.max(14, originWidth + projectedDelta)
-      onChange({ widthPt, heightPt: widthPt / ratio })
+      finalWidthPt = widthPt
+      finalHeightPt = widthPt / ratio
+      onChange({ widthPt: finalWidthPt, heightPt: finalHeightPt })
     }
     const end = () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', end)
+      window.removeEventListener('pointercancel', end)
+      if (finalWidthPt !== originWidth || finalHeightPt !== originHeight) {
+        onResizeEnd(finalWidthPt, finalHeightPt)
+      }
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', end)
+    window.addEventListener('pointercancel', end)
   }
 
   const startRotate = (event: React.PointerEvent) => {
@@ -277,6 +289,7 @@ export function PdfStage({
   onSizeChange,
   onSelect,
   onPlacementChange,
+  onPlacementResizeEnd,
   onTargetComplete,
   onTargetDraftChange,
   onTargetConfirm,
@@ -410,6 +423,9 @@ export function PdfStage({
               disabled={tool !== 'select'}
               onSelect={() => onSelect(placement.id)}
               onChange={(patch) => onPlacementChange(placement.id, patch)}
+              onResizeEnd={(widthPt, heightPt) =>
+                onPlacementResizeEnd(asset.id, widthPt, heightPt)
+              }
             />
           )
         })}

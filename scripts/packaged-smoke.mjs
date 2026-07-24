@@ -14,8 +14,22 @@ await new Promise((resolve, reject) => {
 
 let messageId = 0
 const pending = new Map()
+const runtimeEvents = []
 socket.addEventListener('message', (event) => {
   const message = JSON.parse(event.data)
+  if (message.method === 'Runtime.exceptionThrown') {
+    runtimeEvents.push({
+      method: message.method,
+      text: message.params?.exceptionDetails?.text,
+      description: message.params?.exceptionDetails?.exception?.description,
+    })
+  } else if (message.method === 'Runtime.consoleAPICalled') {
+    runtimeEvents.push({
+      method: message.method,
+      type: message.params?.type,
+      values: message.params?.args?.map((argument) => argument.value ?? argument.description),
+    })
+  }
   const waiter = pending.get(message.id)
   if (!waiter) return
   pending.delete(message.id)
@@ -28,16 +42,23 @@ const call = (method, params = {}) =>
     const id = ++messageId
     pending.set(id, { resolve, reject })
     socket.send(JSON.stringify({ id, method, params }))
-  })
-
-await call('DOM.enable')
-const documentResult = await call('DOM.getDocument', { depth: 2 })
-const inputResult = await call('DOM.querySelector', {
-  nodeId: documentResult.root.nodeId,
-  selector: 'input[type="file"][accept="application/pdf,.pdf"]',
 })
-if (!inputResult.nodeId) throw new Error('PDF input not found')
-await call('DOM.setFileInputFiles', { nodeId: inputResult.nodeId, files: [pdfPath] })
+
+await call('Runtime.enable')
+await call('DOM.enable')
+let pdfInputNodeId = 0
+const inputDeadline = Date.now() + 10000
+while (!pdfInputNodeId && Date.now() < inputDeadline) {
+  const documentResult = await call('DOM.getDocument', { depth: 2 })
+  const inputResult = await call('DOM.querySelector', {
+    nodeId: documentResult.root.nodeId,
+    selector: 'input[type="file"][accept="application/pdf,.pdf"]',
+  })
+  pdfInputNodeId = inputResult.nodeId
+  if (!pdfInputNodeId) await new Promise((resolve) => setTimeout(resolve, 100))
+}
+if (!pdfInputNodeId) throw new Error('PDF input not found')
+await call('DOM.setFileInputFiles', { nodeId: pdfInputNodeId, files: [pdfPath] })
 
 const result = await call('Runtime.evaluate', {
   expression: `(async () => {
@@ -54,6 +75,7 @@ const result = await call('Runtime.evaluate', {
         const zoomInput = document.querySelector('[data-testid="zoom-input"]');
         const handToolButton = document.querySelector('[data-testid="hand-tool-button"]');
         const targetToolButton = document.querySelector('[data-testid="target-tool-button"]');
+        const saveTemplateButton = document.querySelector('[data-testid="save-template-button"]');
         const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
         let darkSamples = 0;
         const stride = Math.max(4, Math.floor(pixels.length / 12000 / 4) * 4);
@@ -76,7 +98,8 @@ const result = await call('Runtime.evaluate', {
             Boolean(referencePdfButton) &&
             Boolean(zoomInput) &&
             Boolean(handToolButton) &&
-            Boolean(targetToolButton),
+            Boolean(targetToolButton) &&
+            Boolean(saveTemplateButton),
           title: document.title,
           canvas: { width: canvas.width, height: canvas.height, darkSamples },
           secureExport: { present: Boolean(secureExport), checked: secureExport?.checked ?? false },
@@ -86,6 +109,7 @@ const result = await call('Runtime.evaluate', {
             handToolPresent: Boolean(handToolButton),
             editableTargetToolPresent: Boolean(targetToolButton),
           },
+          templates: { saveButtonPresent: Boolean(saveTemplateButton) },
           decoderAsset: assetResult,
           pageIndicator: Array.from(document.querySelectorAll('.page-controls span')).map((item) => item.textContent),
         };
@@ -112,5 +136,5 @@ const result = await call('Runtime.evaluate', {
 
 socket.close()
 const value = result.result.value
-console.log(JSON.stringify(value, null, 2))
+console.log(JSON.stringify({ ...value, runtimeEvents }, null, 2))
 if (!value?.ok) process.exitCode = 1
