@@ -26,6 +26,29 @@ export interface Placement {
   opacity: number
 }
 
+export interface TemplatePlacement {
+  assetId: string
+  assetName: string
+  assetKind: AssetKind
+  pageIndex: number
+  xRatio: number
+  yRatio: number
+  widthMm: number
+  heightMm: number
+  rotation: number
+  opacity: number
+}
+
+export interface StampTemplate {
+  id: string
+  name: string
+  sourceFileName: string
+  sourcePageCount: number
+  placements: TemplatePlacement[]
+  createdAt: number
+  updatedAt: number
+}
+
 export interface PageSize {
   widthPt: number
   heightPt: number
