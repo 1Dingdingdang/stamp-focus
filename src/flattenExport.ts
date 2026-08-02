@@ -85,13 +85,27 @@ export const renderFlattenedPages = async (
       context.globalAlpha = placement.opacity
       context.translate(centerX, centerY)
       context.rotate((placement.rotation * Math.PI) / 180)
-      context.drawImage(
-        image,
-        (-placement.widthPt * scaleX) / 2,
-        (-placement.heightPt * scaleY) / 2,
-        placement.widthPt * scaleX,
-        placement.heightPt * scaleY,
-      )
+      if (placement.imageCrop) {
+        context.drawImage(
+          image,
+          image.naturalWidth * placement.imageCrop.xRatio,
+          image.naturalHeight * placement.imageCrop.yRatio,
+          image.naturalWidth * placement.imageCrop.widthRatio,
+          image.naturalHeight * placement.imageCrop.heightRatio,
+          (-placement.widthPt * scaleX) / 2,
+          (-placement.heightPt * scaleY) / 2,
+          placement.widthPt * scaleX,
+          placement.heightPt * scaleY,
+        )
+      } else {
+        context.drawImage(
+          image,
+          (-placement.widthPt * scaleX) / 2,
+          (-placement.heightPt * scaleY) / 2,
+          placement.widthPt * scaleX,
+          placement.heightPt * scaleY,
+        )
+      }
       context.restore()
     }
 

@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { Placement, StampAsset } from './types'
-import { loadSavedAssets, saveAssets, updateAssetDefaultSize } from './assetStorage'
+import {
+  clearAssetCategory,
+  loadSavedAssets,
+  saveAssets,
+  updateAssetDefaultSize,
+} from './assetStorage'
 import { fitPlacementToTarget, mmToPt, ptToMm } from './utils'
 
 const values = new Map<string, string>()
@@ -81,5 +86,15 @@ describe('asset default size storage', () => {
     values.set('stamp-focus-assets-v1', JSON.stringify([legacyAsset]))
 
     expect(loadSavedAssets()[0]).toMatchObject({ widthMm: 42, heightMm: 21 })
+  })
+
+  it('persists an asset category and clears it without deleting the asset', () => {
+    const categorized = { ...makeAsset('company-stamp', 40, 40), categoryId: 'company' }
+
+    expect(saveAssets([categorized])).toBe(true)
+    expect(loadSavedAssets()[0].categoryId).toBe('company')
+
+    const [uncategorized] = clearAssetCategory(loadSavedAssets(), 'company')
+    expect(uncategorized).toMatchObject({ id: 'company-stamp', categoryId: undefined })
   })
 })

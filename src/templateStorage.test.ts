@@ -117,6 +117,30 @@ describe('stamp template storage and application', () => {
     expect(applied.placements[0]).toMatchObject({ rotation: 5, opacity: 0.85 })
   })
 
+  it('preserves a cropped riding-seam slice in a saved template', () => {
+    const seamPlacement: Placement = {
+      ...placements[0],
+      widthPt: mmToPt(10),
+      imageCrop: { xRatio: 0.25, yRatio: 0, widthRatio: 0.25, heightRatio: 1 },
+      seam: { groupId: 'seam-group', index: 1, count: 4, edge: 'right', reversed: false },
+    }
+    const template = createStampTemplate({
+      id: 'template-seam',
+      name: '骑缝章范式',
+      sourceFileName: '合同.pdf',
+      sourcePageCount: 2,
+      placements: [seamPlacement],
+      assets,
+      pageSizes,
+    })!
+
+    expect(template.placements[0].imageCrop).toEqual(seamPlacement.imageCrop)
+    expect(template.placements[0].seam).toEqual(seamPlacement.seam)
+    const applied = instantiateStampTemplate(template, assets, pageSizes)
+    expect(applied.placements[0].imageCrop).toEqual(seamPlacement.imageCrop)
+    expect(applied.placements[0].seam).toEqual(seamPlacement.seam)
+  })
+
   it('falls back to matching asset name and reports missing assets or pages', () => {
     const template: StampTemplate = {
       id: 'template-1',

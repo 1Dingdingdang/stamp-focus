@@ -90,10 +90,11 @@ export const exportStampedPdf = async (
     const asset = assetMap.get(placement.assetId)
     if (!page || !asset) continue
 
-    let image = embedded.get(asset.id)
+    const imageDataUrl = placement.renderDataUrl ?? asset.dataUrl
+    let image = embedded.get(imageDataUrl)
     if (!image) {
-      image = await pdf.embedPng(dataUrlToUint8Array(asset.dataUrl))
-      embedded.set(asset.id, image)
+      image = await pdf.embedPng(dataUrlToUint8Array(imageDataUrl))
+      embedded.set(imageDataUrl, image)
     }
 
     const { height: pageHeight } = page.getSize()

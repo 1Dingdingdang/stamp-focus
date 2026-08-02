@@ -1,7 +1,7 @@
 {
   "name": "stamp-focus",
   "private": true,
-  "version": "0.1.11",
+  "version": "0.1.14",
   "description": "按真实毫米校准并放置 PDF 电子签名和印章的离线桌面工具",
   "main": "electron/main.cjs",
   "author": "Stamp Focus",

@@ -59,12 +59,14 @@ function PlacementBox({
   onResizeEnd: (widthPt: number, heightPt: number) => void
 }) {
   const boxRef = useRef<HTMLDivElement>(null)
+  const locked = Boolean(placement.seam)
 
   const startDrag = (event: React.PointerEvent) => {
     if (disabled) return
     event.preventDefault()
     event.stopPropagation()
     onSelect()
+    if (locked) return
     const startX = event.clientX
     const startY = event.clientY
     const originX = placement.xPt
@@ -142,7 +144,7 @@ function PlacementBox({
   return (
     <div
       ref={boxRef}
-      className={`placement ${selected ? 'is-selected' : ''}`}
+      className={`placement ${selected ? 'is-selected' : ''} ${locked ? 'is-locked' : ''}`}
       style={{
         left: placement.xPt * zoom,
         top: placement.yPt * zoom,
@@ -157,8 +159,20 @@ function PlacementBox({
       aria-label={`${asset.name}，拖动调整位置`}
       tabIndex={disabled ? -1 : 0}
     >
-      <img src={asset.dataUrl} alt="" draggable={false} />
-      {selected && !disabled && (
+      <span className="placement-image-crop">
+        <img
+          src={asset.dataUrl}
+          alt=""
+          draggable={false}
+          style={placement.imageCrop ? {
+            width: `${100 / placement.imageCrop.widthRatio}%`,
+            height: `${100 / placement.imageCrop.heightRatio}%`,
+            left: `${-(placement.imageCrop.xRatio / placement.imageCrop.widthRatio) * 100}%`,
+            top: `${-(placement.imageCrop.yRatio / placement.imageCrop.heightRatio) * 100}%`,
+          } : undefined}
+        />
+      </span>
+      {selected && !disabled && !locked && (
         <>
           <button className="rotation-handle" onPointerDown={startRotate} aria-label="旋转">
             <RotateCw size={13} strokeWidth={2.2} />

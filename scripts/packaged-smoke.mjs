@@ -1,5 +1,6 @@
 const endpoint = process.argv[2] ?? 'http://127.0.0.1:9222'
 const pdfPath = process.argv[3]
+const seamStampPath = process.argv[4]
 if (!pdfPath) throw new Error('Usage: node scripts/packaged-smoke.mjs <debug-url> <pdf-path>')
 
 const pages = await fetch(`${endpoint}/json/list`).then((response) => response.json())
@@ -42,7 +43,34 @@ const call = (method, params = {}) =>
     const id = ++messageId
     pending.set(id, { resolve, reject })
     socket.send(JSON.stringify({ id, method, params }))
-})
+  })
+
+const evaluate = async (expression) => {
+  const response = await call('Runtime.evaluate', {
+    expression,
+    awaitPromise: true,
+    returnByValue: true,
+  })
+  return response.result.value
+}
+
+const waitFor = async (expression, timeoutMs = 15000) => {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (await evaluate(expression)) return true
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  return false
+}
+
+const findInputNode = async (selector) => {
+  const documentResult = await call('DOM.getDocument', { depth: 2 })
+  const inputResult = await call('DOM.querySelector', {
+    nodeId: documentResult.root.nodeId,
+    selector,
+  })
+  return inputResult.nodeId
+}
 
 await call('Runtime.enable')
 await call('DOM.enable')
@@ -76,6 +104,8 @@ const result = await call('Runtime.evaluate', {
         const handToolButton = document.querySelector('[data-testid="hand-tool-button"]');
         const targetToolButton = document.querySelector('[data-testid="target-tool-button"]');
         const saveTemplateButton = document.querySelector('[data-testid="save-template-button"]');
+        const categoryAddButton = document.querySelector('[data-testid="category-add-button"]');
+        const pageIndicator = Array.from(document.querySelectorAll('.page-controls span')).map((item) => item.textContent);
         const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
         let darkSamples = 0;
         const stride = Math.max(4, Math.floor(pixels.length / 12000 / 4) * 4);
@@ -99,7 +129,9 @@ const result = await call('Runtime.evaluate', {
             Boolean(zoomInput) &&
             Boolean(handToolButton) &&
             Boolean(targetToolButton) &&
-            Boolean(saveTemplateButton),
+            Boolean(saveTemplateButton) &&
+            Boolean(categoryAddButton) &&
+            pageIndicator.some((text) => text?.includes('1 / 5')),
           title: document.title,
           canvas: { width: canvas.width, height: canvas.height, darkSamples },
           secureExport: { present: Boolean(secureExport), checked: secureExport?.checked ?? false },
@@ -110,8 +142,9 @@ const result = await call('Runtime.evaluate', {
             editableTargetToolPresent: Boolean(targetToolButton),
           },
           templates: { saveButtonPresent: Boolean(saveTemplateButton) },
+          categories: { addButtonPresent: Boolean(categoryAddButton) },
           decoderAsset: assetResult,
-          pageIndicator: Array.from(document.querySelectorAll('.page-controls span')).map((item) => item.textContent),
+          pageIndicator,
         };
       }
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -134,7 +167,92 @@ const result = await call('Runtime.evaluate', {
   returnByValue: true,
 })
 
-socket.close()
 const value = result.result.value
-console.log(JSON.stringify({ ...value, runtimeEvents }, null, 2))
-if (!value?.ok) process.exitCode = 1
+let seamFeature
+if (value?.ok && seamStampPath) {
+  const imageInputNodeId = await findInputNode('input[type="file"][accept^="image/"]')
+  if (!imageInputNodeId) {
+    seamFeature = { ok: false, error: 'Stamp image input not found' }
+  } else {
+    await call('DOM.setFileInputFiles', { nodeId: imageInputNodeId, files: [seamStampPath] })
+    const modalReady = await waitFor(`Boolean(document.querySelector('.asset-modal'))`)
+    if (!modalReady) {
+      seamFeature = { ok: false, error: 'Stamp calibration modal did not open' }
+    } else {
+      await evaluate(`(() => {
+        const button = Array.from(document.querySelectorAll('.kind-picker button')).find((item) => item.textContent?.includes('印章'));
+        button?.click();
+        return Boolean(button);
+      })()`)
+      const saveReady = await waitFor(`Boolean(document.querySelector('.modal-submit:not(:disabled)'))`, 30000)
+      if (!saveReady) {
+        seamFeature = { ok: false, error: 'Stamp image processing did not finish' }
+      } else {
+        await evaluate(`document.querySelector('.modal-submit')?.click()`)
+        const assetReady = await waitFor(`Boolean(document.querySelector('.asset-main'))`)
+        if (!assetReady) {
+          seamFeature = { ok: false, error: 'Saved stamp asset did not appear' }
+        } else {
+          await evaluate(`document.querySelector('.asset-main')?.click()`)
+          const seamButtonReady = await waitFor(`Boolean(document.querySelector('[data-testid="seam-stamp-button"]'))`)
+          if (!seamButtonReady) {
+            seamFeature = { ok: false, error: 'Seam stamp action did not appear' }
+          } else {
+            await evaluate(`document.querySelector('[data-testid="seam-stamp-button"]')?.click()`)
+            const seamModalReady = await waitFor(`Boolean(document.querySelector('.seam-stamp-modal'))`)
+            if (!seamModalReady) {
+              seamFeature = { ok: false, error: 'Seam stamp modal did not open' }
+            } else {
+              await evaluate(`document.querySelector('[data-testid="confirm-seam-stamp"]')?.click()`)
+              const seamCreated = await waitFor(
+                `!document.querySelector('.seam-stamp-modal') && Boolean(document.querySelector('.placement.is-locked'))`,
+              )
+              if (!seamCreated) {
+                seamFeature = { ok: false, error: 'Seam stamp slices were not created' }
+              } else {
+                const slices = []
+                for (let pageNumber = 1; pageNumber <= 5; pageNumber += 1) {
+                  const slice = await evaluate(`(() => {
+                    const placement = document.querySelector('.placement.is-locked');
+                    const image = placement?.querySelector('.placement-image-crop img');
+                    return {
+                      page: document.querySelector('.page-controls span:last-of-type')?.textContent ?? '',
+                      placementCount: document.querySelectorAll('.placement').length,
+                      locked: Boolean(placement),
+                      imageWidth: image?.style.width ?? '',
+                      imageLeft: image?.style.left ?? '',
+                      inspector: document.querySelector('.inspector-content')?.textContent ?? '',
+                    };
+                  })()`)
+                  slices.push(slice)
+                  if (pageNumber < 5) {
+                    await evaluate(`document.querySelector('button[aria-label="下一页"]')?.click()`)
+                    await waitFor(`Array.from(document.querySelectorAll('.page-controls span')).some((item) => item.textContent?.includes('${pageNumber + 1} / 5'))`)
+                  }
+                }
+                const expectedLeft = ['0%', '-100%', '-200%', '-300%', '-400%']
+                seamFeature = {
+                  ok:
+                    slices.length === 5 &&
+                    slices.every((slice, index) =>
+                      slice.placementCount === 1 &&
+                      slice.locked &&
+                      slice.imageWidth === '500%' &&
+                      slice.imageLeft === expectedLeft[index]
+                    ) &&
+                    slices[0].inspector.includes('骑缝切片 1/5'),
+                  slices,
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+socket.close()
+const output = { ...value, seamFeature, runtimeEvents }
+console.log(JSON.stringify(output, null, 2))
+if (!value?.ok || (seamStampPath && !seamFeature?.ok)) process.exitCode = 1

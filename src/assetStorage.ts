@@ -29,8 +29,12 @@ export const loadSavedAssets = (): StampAsset[] => {
       const heightMm = isPositiveNumber(asset.heightMm)
         ? asset.heightMm
         : asset.widthMm / (asset.pixelWidth / asset.pixelHeight)
+      const categoryId =
+        typeof asset.categoryId === 'string' && asset.categoryId.trim()
+          ? asset.categoryId.trim()
+          : undefined
 
-      return [{ ...asset, heightMm }]
+      return [{ ...asset, heightMm, categoryId }]
     })
   } catch {
     return []
@@ -51,6 +55,19 @@ export const updateAssetDefaultSize = (
     if (asset.widthMm === widthMm && asset.heightMm === heightMm) return asset
     changed = true
     return { ...asset, widthMm, heightMm }
+  })
+
+  return changed ? nextAssets : assets
+}
+
+export const clearAssetCategory = (assets: StampAsset[], categoryId: string) => {
+  if (!categoryId) return assets
+
+  let changed = false
+  const nextAssets = assets.map((asset) => {
+    if (asset.categoryId !== categoryId) return asset
+    changed = true
+    return { ...asset, categoryId: undefined }
   })
 
   return changed ? nextAssets : assets

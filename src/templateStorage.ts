@@ -15,6 +15,31 @@ const isFiniteNumber = (value: unknown): value is number =>
 const isPositiveNumber = (value: unknown): value is number =>
   isFiniteNumber(value) && value > 0
 
+const isValidImageCrop = (crop: TemplatePlacement['imageCrop']) =>
+  crop === undefined || (
+    isFiniteNumber(crop.xRatio) &&
+    isFiniteNumber(crop.yRatio) &&
+    isPositiveNumber(crop.widthRatio) &&
+    isPositiveNumber(crop.heightRatio) &&
+    crop.xRatio >= 0 &&
+    crop.yRatio >= 0 &&
+    crop.xRatio + crop.widthRatio <= 1.000001 &&
+    crop.yRatio + crop.heightRatio <= 1.000001
+  )
+
+const isValidSeamInfo = (seam: TemplatePlacement['seam']) =>
+  seam === undefined || (
+    typeof seam.groupId === 'string' &&
+    seam.groupId.length > 0 &&
+    Number.isInteger(seam.index) &&
+    seam.index >= 0 &&
+    Number.isInteger(seam.count) &&
+    seam.count >= 2 &&
+    seam.index < seam.count &&
+    (seam.edge === 'left' || seam.edge === 'right') &&
+    typeof seam.reversed === 'boolean'
+  )
+
 const isValidTemplatePlacement = (placement: TemplatePlacement) =>
   placement &&
   typeof placement.assetId === 'string' &&
@@ -27,7 +52,9 @@ const isValidTemplatePlacement = (placement: TemplatePlacement) =>
   isPositiveNumber(placement.widthMm) &&
   isPositiveNumber(placement.heightMm) &&
   isFiniteNumber(placement.rotation) &&
-  isFiniteNumber(placement.opacity)
+  isFiniteNumber(placement.opacity) &&
+  isValidImageCrop(placement.imageCrop) &&
+  isValidSeamInfo(placement.seam)
 
 export const loadSavedTemplates = (): StampTemplate[] => {
   try {
@@ -100,6 +127,8 @@ export const createStampTemplate = ({
       heightMm: ptToMm(placement.heightPt),
       rotation: placement.rotation,
       opacity: placement.opacity,
+      imageCrop: placement.imageCrop ? { ...placement.imageCrop } : undefined,
+      seam: placement.seam ? { ...placement.seam } : undefined,
     }]
   })
 
@@ -161,6 +190,8 @@ export const instantiateStampTemplate = (
       heightPt,
       rotation: saved.rotation,
       opacity: Math.min(1, Math.max(0.1, saved.opacity)),
+      imageCrop: saved.imageCrop ? { ...saved.imageCrop } : undefined,
+      seam: saved.seam ? { ...saved.seam } : undefined,
     })
   })
 

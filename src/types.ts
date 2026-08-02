@@ -2,10 +2,17 @@ import type { PDFDocumentProxy } from 'pdfjs-dist'
 
 export type AssetKind = 'signature' | 'stamp'
 
+export interface StampCategory {
+  id: string
+  name: string
+  createdAt: number
+}
+
 export interface StampAsset {
   id: string
   name: string
   kind: AssetKind
+  categoryId?: string
   dataUrl: string
   pixelWidth: number
   pixelHeight: number
@@ -24,6 +31,24 @@ export interface Placement {
   heightPt: number
   rotation: number
   opacity: number
+  imageCrop?: PlacementImageCrop
+  seam?: SeamStampInfo
+  renderDataUrl?: string
+}
+
+export interface PlacementImageCrop {
+  xRatio: number
+  yRatio: number
+  widthRatio: number
+  heightRatio: number
+}
+
+export interface SeamStampInfo {
+  groupId: string
+  index: number
+  count: number
+  edge: 'left' | 'right'
+  reversed: boolean
 }
 
 export interface TemplatePlacement {
@@ -37,6 +62,8 @@ export interface TemplatePlacement {
   heightMm: number
   rotation: number
   opacity: number
+  imageCrop?: PlacementImageCrop
+  seam?: SeamStampInfo
 }
 
 export interface StampTemplate {
