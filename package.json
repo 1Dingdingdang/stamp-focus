@@ -55,7 +55,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
     "concurrently": "^9.2.4",
-    "electron": "^39.2.7",
+    "electron": "^41.10.6",
     "electron-builder": "^26.0.12",
     "typescript": "^7.0.2",
     "vite": "^8.1.5",
